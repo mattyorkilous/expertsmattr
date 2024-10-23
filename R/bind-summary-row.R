@@ -1,3 +1,52 @@
+#' Bind one or many summary rows to a data frame
+#'
+#' `bind_summary_row()` handles the simple case of adding a total row to a data
+#' frame, but with much greater flexibility. Specify one or many summary rows
+#' using your own custom summary functions with `fns`, control placement of
+#' labels with `labels_to` and `below`, or add a summary row for each group with
+#' `by`.
+#'
+#' @param data A data frame
+#' @param cols A tidy-select selection of columns to summarize.
+#' @param fns A named list of functions, where the name gives the label in the
+#' column determined by `labels_to`.
+#' @param labels_to A character vector of length one specifying the column to
+#' (create if necessary and) put the labels in.
+#' @param by A tidy-select selection of columns to summarize by.
+#' @param below Default is `TRUE`. Binds total rows below the data. If `FALSE`,
+#' binds total rows above the data.
+#'
+#' @return A data frame.
+#' @export
+#'
+#' @examples
+#' library(dplyr)
+#' data("starwars")
+#'
+#' starwars |>
+#'   select(name, height, mass) |>
+#'   bind_summary_row(
+#'     cols = c(height, mass),
+#'     fns = list(
+#'       "Total" = \(x) sum(x, na.rm = TRUE)
+#'     ),
+#'     labels_to = "name",
+#'     below = FALSE
+#'   )
+#'
+#' starwars |>
+#'   select(sex, name, height, mass) |>
+#'   bind_summary_row(
+#'     cols = c(height, mass),
+#'     fns = list(
+#'       "Maximum" = \(x) max(x, na.rm = TRUE),
+#'       "Total" = \(x) sum(x, na.rm = TRUE)
+#'     ),
+#'     labels_to = " ",
+#'     by = sex,
+#'     below = FALSE
+#'   )
+#' @importFrom rlang .data `:=`
 bind_summary_row <- function(data,
                              cols,
                              fns,
@@ -10,88 +59,130 @@ bind_summary_row <- function(data,
     stop("Must choose a column for labels")
   }
 
-  out <- data |>
-    dplyr::mutate(
-      dplyr::across(
-        {{ cols }},
-        fns,
-        .names = "{.col}_{.fn}"
-      ),
-      .by = {{ by }}
-    )
+  data_augmented <- apply_fns_to_cols(data, {{ cols }}, fns, {{ by }})
 
-  new_cols <- tidyr::expand_grid(
-    col = colnames(dplyr::select(data, {{ cols }})),
-    fn = names(fns)
-  ) |>
-    mutate_rowwise(
-      new_col = stringr::str_glue("{col}_{fn}")
-    )
+  cols_old <- colnames(data)
 
-  out <- out |>
-    tidyr::nest(
-      .by = c(
-        {{ by }},
-        tidyr::all_of(
-          purrr::pluck(new_cols, "new_col")
-        )
-      )
-    )
+  cols_new <- setdiff(colnames(data_augmented), cols_old)
 
-  out <- purrr::reduce(
-    names(fns),
-    \(data, fn_name) nest_summary_cols(data, fn_name, new_cols),
-    .init = out
+  data_nested <- tidyr::nest(
+    data_augmented,
+    .by = c({{ by }}, tidyr::all_of(cols_new))
   )
 
-  out <- out |>
-    mutate_rowwise(
-      dplyr::across(
-        tidyr::all_of(names(fns)),
-        \(x) list(
-          x |>
-            dplyr::rename_with(
-              \(col) stringr::str_remove(
-                string = col,
-                pattern = stringr::str_c("_", dplyr::cur_column(), "$")
-              )
-            ) |>
-            dplyr::mutate(
-              "{labels_to}" := dplyr::cur_column()
-            )
-        )
-      )
-    )
+  summaries_nested <- nest_all_summary_cols(data_nested, fns, cols_new)
+
+  summaries_formatted <- format_all_summaries(
+    summaries_nested,
+    fns,
+    labels_to
+  )
 
   if (below) {
-    out <- out |>
-      tidyr::pivot_longer(
-        c(data, tidyr::all_of(names(fns))),
-        names_to = "..name",
-        values_to = "..value"
-      )
+    nested_ordered <- pivot_longer_order(
+      summaries_formatted,
+      tidyr::all_of(c("data", names(fns)))
+    )
   } else {
-    out <- out |>
-      tidyr::pivot_longer(
-        c(tidyr::all_of(names(fns)), data),
-        names_to = "..name",
-        values_to = "..value"
-      )
+    nested_ordered <- pivot_longer_order(
+      summaries_formatted,
+      tidyr::all_of(c(names(fns), "data"))
+    )
   }
 
-  out <- out |>
-    dplyr::select(!..name) |>
-    tidyr::unnest(..value) |>
-    dplyr::relocate(any_of(by_cols), all_of(labels_to)) |>
-    dplyr::relocate({{ cols  }}, .after = dplyr::last_col())
+  out <- unnest_relocate(nested_ordered, by_cols, labels_to, cols_old)
 
   out
 }
 
-nest_summary_cols <- function(data, fn_name, new_cols) {
-  new_col <- dplyr::filter(new_cols, fn == fn_name) |>
-    purrr::pluck("new_col")
+apply_fns_to_cols <- function(data, cols, fns, by) {
+  data_augmented <- dplyr::mutate(
+    data,
+    dplyr::across(
+      {{ cols }},
+      fns,
+      .names = "{.col}_{.fn}"
+    ),
+    .by = {{ by }}
+  )
 
-  data |>
-    tidyr::nest("{fn_name}" := tidyr::all_of(new_col))
+  data_augmented
+}
+
+nest_all_summary_cols <- function(data_nested, fns, cols_new) {
+  summaries_nested <- purrr::reduce(
+    names(fns),
+    \(data, fn_name) nest_summary_cols(data, fn_name, cols_new),
+    .init = data_nested
+  )
+
+  summaries_nested
+}
+
+nest_summary_cols <- function(data, fn_name, cols_new) {
+  cols_to_nest <- stringr::str_subset(
+    cols_new,
+    stringr::str_glue("_{fn_name}$")
+  )
+
+  summary_nested <- tidyr::nest(
+    data,
+    "{fn_name}" := tidyr::all_of(cols_to_nest)
+  )
+
+  summary_nested
+}
+
+format_all_summaries <- function(summaries_nested, fns, labels_to) {
+  summaries_formatted <- mutate_rowwise(
+    summaries_nested,
+    dplyr::across(
+      tidyr::all_of(names(fns)),
+      \(df) format_summary(df, dplyr::cur_column(), labels_to)
+    )
+  )
+
+  summaries_formatted
+}
+
+format_summary <- function(df, fn_name, labels_to) {
+  df_renamed <- dplyr::rename_with(df, \(col) strip_suffix(col, fn_name))
+
+  df_renamed_labeled <- dplyr::mutate(df_renamed, "{labels_to}" := fn_name)
+
+  df_out <- list(df_renamed_labeled)
+
+  df_out
+}
+
+strip_suffix <- function(col, fn_name) {
+  suffix_stripped <- stringr::str_remove(col, stringr::str_c("_", fn_name, "$"))
+
+  suffix_stripped
+}
+
+pivot_longer_order <- function(summaries_nested_cleaned, order) {
+  nested_ordered <- tidyr::pivot_longer(
+    summaries_nested_cleaned,
+    {{ order }},
+    names_to = "..name",
+    values_to = "..value"
+  )
+
+  nested_ordered
+}
+
+unnest_relocate <- function(nested_ordered, by_cols, labels_to, cols_old) {
+  selection <- dplyr::select(nested_ordered, !tidyr::all_of("..name"))
+
+  unnested <- tidyr::unnest(selection, tidyr::all_of("..value"))
+
+  out <- dplyr::relocate(
+    unnested,
+    tidyr::any_of(by_cols),
+    tidyr::all_of(labels_to),
+    tidyr::any_of(cols_old)
+  )
+
+  out
 }

@@ -1,12 +1,21 @@
 Package: expertsmattr
-Title: What the Package Does (One Line, Title Case)
+Title: Helpful Functions for Use in Expert Matters
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
-           comment = c(ORCID = "YOUR-ORCID-ID"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+    person("Matt", "Yorkilous", , "matt_yorkilous@yahoo.com", role = c("aut", "cre"))
+Description: A few shortcut functions mostly useful for economic consulting.
+License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
+Imports: 
+    dplyr,
+    openxlsx,
+    purrr,
+    readxl,
+    rlang,
+    stringr,
+    tidyr
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
