@@ -53,8 +53,6 @@ bind_summary_row <- function(data,
                              labels_to = NULL,
                              by = NULL,
                              below = TRUE) {
-  by_cols <- colnames(dplyr::select(data, {{ by }}))
-
   if (is.null(labels_to)) {
     stop("Must choose a column for labels")
   }
@@ -90,7 +88,7 @@ bind_summary_row <- function(data,
     )
   }
 
-  out <- unnest_relocate(nested_ordered, by_cols, labels_to, cols_old)
+  out <- unnest_relocate(nested_ordered, {{ by }}, labels_to, cols_old)
 
   out
 }
@@ -172,14 +170,14 @@ pivot_longer_order <- function(summaries_nested_cleaned, order) {
   nested_ordered
 }
 
-unnest_relocate <- function(nested_ordered, by_cols, labels_to, cols_old) {
+unnest_relocate <- function(nested_ordered, by, labels_to, cols_old) {
   selection <- dplyr::select(nested_ordered, !tidyr::all_of("..name"))
 
   unnested <- tidyr::unnest(selection, tidyr::all_of("..value"))
 
   out <- dplyr::relocate(
     unnested,
-    tidyr::any_of(by_cols),
+    {{ by }},
     tidyr::all_of(labels_to),
     tidyr::any_of(cols_old)
   )
